@@ -1,0 +1,167 @@
+# Centralized, reusable CI pipeline for every web app in apps/*.
+#
+# Apps don't copy this. Each app has a tiny caller workflow that does:
+#   jobs: { ci: { uses: ./.github/workflows/web-app-ci.yml, with: {...} } }
+# and passes its own path, image name, coverage thresholds, and whether to run
+# the Kubernetes/deploy stages. Change the pipeline here once and every app gets it.
+#
+# Across repos (the real org case) the caller references it by full path and a
+# pinned tag instead of the local ./ form, e.g.:
+#   uses: my-org/agentic-ai-enterprise-sdlc/.github/workflows/web-app-ci.yml@v1
+
+name: web-app-ci
+
+on:
+  workflow_call:
+    inputs:
+      app-path:
+        description: Path to the app (e.g. apps/taskboard)
+        required: true
+        type: string
+      image-name:
+        description: Container image / deployment name (e.g. taskboard)
+        required: true
+        type: string
+      node-version:
+        required: false
+        type: string
+        default: "22"
+      coverage-lines:
+        required: false
+        type: number
+        default: 80
+      coverage-functions:
+        required: false
+        type: number
+        default: 80
+      coverage-branches:
+        required: false
+        type: number
+        default: 70
+      run-kind-e2e:
+        description: Build an image and run e2e against it deployed to Kind
+        required: false
+        type: boolean
+        default: false
+      publish-image:
+        description: Publish the image to GHCR on pushes to main
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+        with:
+          app-path: ${{ inputs.app-path }}
+          node-version: ${{ inputs.node-version }}
+      - name: Build
+        working-directory: ${{ inputs.app-path }}
+        run: npm run build
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+        with:
+          app-path: ${{ inputs.app-path }}
+          node-version: ${{ inputs.node-version }}
+      - name: Run e2e
+        working-directory: ${{ inputs.app-path }}
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: ${{ inputs.image-name }}-playwright-report
+          path: |
+            ${{ inputs.app-path }}/playwright-report/
+            ${{ inputs.app-path }}/test-results/
+          retention-days: 7
+          include-hidden-files: true
+
+  coverage:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env: { COVERAGE: '1' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+        with:
+          app-path: ${{ inputs.app-path }}
+          node-version: ${{ inputs.node-version }}
+      - name: Run suite with coverage
+        working-directory: ${{ inputs.app-path }}
+        run: npm run test:coverage
+      - name: Enforce the central coverage gate
+        run: >
+          node ci/check-coverage.mjs
+          ${{ inputs.app-path }}/coverage/coverage-summary.json
+          --lines ${{ inputs.coverage-lines }}
+          --functions ${{ inputs.coverage-functions }}
+          --branches ${{ inputs.coverage-branches }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: ${{ inputs.image-name }}-coverage-report
+          path: ${{ inputs.app-path }}/coverage/
+          retention-days: 7
+
+  kind-e2e:
+    needs: e2e
+    if: ${{ inputs.run-kind-e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env: { IMAGE: '${{ inputs.image-name }}:${{ github.sha }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.app-path }}/package-lock.json
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: qa
+          config: ${{ inputs.app-path }}/k8s/kind-config.yaml
+      - run: docker build -t "$IMAGE" "${{ inputs.app-path }}"
+      - run: kind load docker-image "$IMAGE" --name qa
+      - name: Deploy to Kind
+        run: |
+          sed "s|${{ inputs.image-name }}:dev|$IMAGE|" "${{ inputs.app-path }}/k8s/app.yaml" | kubectl apply -f -
+          kubectl rollout status deployment/${{ inputs.image-name }} --timeout=180s
+      - name: e2e against the deployed app
+        working-directory: ${{ inputs.app-path }}
+        run: npm ci && npx playwright install --with-deps chromium && npx playwright test
+        env: { BASE_URL: 'http://localhost:8080' }
+      - if: failure()
+        run: kubectl get pods -o wide && kubectl describe pods && kubectl logs deployment/${{ inputs.image-name }} --all-containers
+
+  publish:
+    needs: [coverage, kind-e2e]
+    if: ${{ inputs.publish-image && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.app-path }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:main

@@ -1,0 +1,31 @@
+# Dependencies
+**/node_modules
+
+# Next.js
+**/.next/
+**/out/
+
+# Production build
+**/build
+
+# Testing / coverage
+**/coverage
+**/test-results/
+**/playwright-report/
+**/blob-report/
+**/playwright/.cache/
+**/.playwright-mcp/
+
+# TypeScript
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+# Env files
+**/.env
+**/.env.*
+
+# Misc
+.DS_Store
+**/*.pem
+**/npm-debug.log*
+.vercel

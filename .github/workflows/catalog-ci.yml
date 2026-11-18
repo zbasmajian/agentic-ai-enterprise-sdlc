@@ -1,0 +1,33 @@
+# Caller for apps/catalog. Same central pipeline, different knobs: this app
+# ships no Kubernetes manifests yet, so it skips the Kind/publish stages and
+# sets its own (stricter) coverage bar — all via inputs, no copied YAML.
+name: catalog CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/catalog/**'
+      - '.github/workflows/catalog-ci.yml'
+      - '.github/workflows/web-app-ci.yml'
+      - '.github/actions/setup-web/**'
+      - 'ci/**'
+  pull_request:
+    paths:
+      - 'apps/catalog/**'
+      - '.github/workflows/catalog-ci.yml'
+      - '.github/workflows/web-app-ci.yml'
+      - '.github/actions/setup-web/**'
+      - 'ci/**'
+
+jobs:
+  ci:
+    uses: ./.github/workflows/web-app-ci.yml
+    with:
+      app-path: apps/catalog
+      image-name: catalog
+      coverage-lines: 90
+      coverage-functions: 90
+      coverage-branches: 80
+      run-kind-e2e: false
+      publish-image: false

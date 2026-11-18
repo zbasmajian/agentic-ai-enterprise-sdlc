@@ -1,0 +1,32 @@
+# Caller for apps/taskboard. All the real work lives in the central
+# web-app-ci.yml; this file just says "run that pipeline, for this app".
+name: taskboard CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/taskboard/**'
+      - '.github/workflows/taskboard-ci.yml'
+      - '.github/workflows/web-app-ci.yml'
+      - '.github/actions/setup-web/**'
+      - 'ci/**'
+  pull_request:
+    paths:
+      - 'apps/taskboard/**'
+      - '.github/workflows/taskboard-ci.yml'
+      - '.github/workflows/web-app-ci.yml'
+      - '.github/actions/setup-web/**'
+      - 'ci/**'
+
+jobs:
+  ci:
+    uses: ./.github/workflows/web-app-ci.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      app-path: apps/taskboard
+      image-name: taskboard
+      run-kind-e2e: true
+      publish-image: true

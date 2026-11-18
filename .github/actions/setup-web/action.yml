@@ -1,0 +1,47 @@
+name: Set up web app
+description: >
+  Shared setup for any web app in apps/*: Node with npm cache, npm ci, and the
+  Playwright Chromium browser with its own cache. Centralized so every app and
+  every job installs the same way.
+
+inputs:
+  app-path:
+    description: Path to the app directory (e.g. apps/taskboard)
+    required: true
+  node-version:
+    description: Node.js version
+    required: false
+    default: "22"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.app-path }}/package-lock.json
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.app-path }}
+      run: npm ci
+
+    - name: Cache Playwright browsers
+      id: pw-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.app-path)) }}
+
+    - name: Install Playwright browser (cache miss)
+      if: steps.pw-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ inputs.app-path }}
+      run: npx playwright install --with-deps chromium
+
+    - name: Install browser system deps only (cache hit)
+      if: steps.pw-cache.outputs.cache-hit == 'true'
+      shell: bash
+      working-directory: ${{ inputs.app-path }}
+      run: npx playwright install-deps chromium
